@@ -1,0 +1,4 @@
+<resources>
+
+    <style name="Theme.CastToBrowser" parent="Theme.MaterialComponents.Light" />
+</resources>
