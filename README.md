@@ -46,7 +46,7 @@ The app strictly follows Material 3 guidelines, featuring:
 - **Adaptive Scaffolding**: Side-by-side list and remote dashboard on tablets; seamless transitions on phones.
 
 ## 📄 License
-This project is for educational and personal use. Check the project repository for specific licensing details.
+MIT License
 
 ---
 Developed with ❤️ by the Cast to Browser Team.
