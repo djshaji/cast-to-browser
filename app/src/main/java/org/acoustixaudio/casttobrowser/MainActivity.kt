@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,6 +28,7 @@ import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import org.acoustixaudio.casttobrowser.server.CastServerService
 import org.acoustixaudio.casttobrowser.ui.MainAdaptiveEntry
+import org.acoustixaudio.casttobrowser.ui.purchase.PurchaseScreen
 import org.acoustixaudio.casttobrowser.ui.theme.CastToBrowserTheme
 import org.acoustixaudio.casttobrowser.ui.viewmodel.MediaViewModel
 
@@ -44,6 +47,9 @@ class MainActivity : ComponentActivity() {
             CastToBrowserTheme {
                 val context = LocalContext.current
                 val viewModel: MediaViewModel = viewModel()
+                val showPurchaseScreen by viewModel.showPurchaseScreen.collectAsState()
+                val isBillingReady by viewModel.isBillingReady.collectAsState()
+                val billingError by viewModel.billingError.collectAsState()
 
                 // Handle Shared Intent
                 LaunchedEffect(intent) {
@@ -86,6 +92,17 @@ class MainActivity : ComponentActivity() {
                     ) {
                         if (permissionsState.allPermissionsGranted) {
                             MainAdaptiveEntry(viewModel = viewModel)
+
+                            if (showPurchaseScreen) {
+                                PurchaseScreen(
+                                    isBillingReady = isBillingReady,
+                                    priceLabel = "",
+                                    onPurchaseClick = {
+                                        viewModel.launchProPurchase(this@MainActivity)
+                                    },
+                                    onDismiss = { viewModel.dismissPurchaseScreen() }
+                                )
+                            }
                         } else {
                             Box(
                                 modifier = Modifier
@@ -109,6 +126,13 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    LaunchedEffect(billingError) {
+                        if (!billingError.isNullOrBlank()) {
+                            // Keep this minimal for now; paywall still works even if billing setup is delayed.
+                            println("Billing error: $billingError")
                         }
                     }
                 }

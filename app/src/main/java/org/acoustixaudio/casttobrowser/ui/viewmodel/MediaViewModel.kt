@@ -1,12 +1,16 @@
 package org.acoustixaudio.casttobrowser.ui.viewmodel
 
 import android.app.Application
+import android.app.Activity
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import android.net.Uri
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import org.acoustixaudio.casttobrowser.billing.BillingManager
+import org.acoustixaudio.casttobrowser.data.CastUsageRepository
 import org.acoustixaudio.casttobrowser.data.FolderBrowserRepository
 import org.acoustixaudio.casttobrowser.data.FolderEntry
 import org.acoustixaudio.casttobrowser.data.FolderLocation
@@ -31,6 +35,8 @@ enum class MediaSort(val label: String) {
 class MediaViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = MediaRepository(application)
     private val folderRepository = FolderBrowserRepository(application)
+    private val castUsageRepository = CastUsageRepository(application)
+    private val billingManager = BillingManager(application)
     private var allMediaItems: List<MediaItem> = emptyList()
 
     private val _mediaItems = MutableStateFlow<List<MediaItem>>(emptyList())
@@ -60,15 +66,24 @@ class MediaViewModel(application: Application) : AndroidViewModel(application) {
     private val _folderError = MutableStateFlow<String?>(null)
     val folderError = _folderError.asStateFlow()
 
+    private val _showPurchaseScreen = MutableStateFlow(false)
+    val showPurchaseScreen = _showPurchaseScreen.asStateFlow()
+
     val serverIp = ServerState.serverIp
     val serverPort = ServerState.serverPort
     val serverError = ServerState.serverError
     val currentMedia = ServerState.currentMedia
     val telemetry = ServerState.telemetry
+    val isBillingReady = billingManager.isBillingReady
+    val isPro = billingManager.isPro
+    val billingError = billingManager.billingError
+    val purchaseMessage = billingManager.purchaseMessage
 
     init {
         loadMedia()
         restoreFolderTree()
+        billingManager.connect()
+        observePurchaseState()
     }
 
     fun loadMedia() {
@@ -160,8 +175,27 @@ class MediaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectMedia(media: MediaItem) {
         viewModelScope.launch {
+            maybeShowPurchaseScreen()
             ServerState.setCurrentMedia(media)
         }
+    }
+
+    fun dismissPurchaseScreen() {
+        _showPurchaseScreen.value = false
+    }
+
+    fun openPurchaseScreen() {
+        if (!isPro.value) {
+            _showPurchaseScreen.value = true
+        }
+    }
+
+    fun restorePurchases() {
+        billingManager.refreshPurchases()
+    }
+
+    fun launchProPurchase(activity: Activity) {
+        billingManager.launchProPurchase(activity)
     }
 
     fun togglePlayPause() {
@@ -230,5 +264,33 @@ class MediaViewModel(application: Application) : AndroidViewModel(application) {
         return uri.toString().fold(1125899906842597L) { hash, character ->
             31L * hash + character.code
         }
+    }
+
+    private suspend fun maybeShowPurchaseScreen() {
+        val castCount = castUsageRepository.incrementCastCount()
+        val paywallAlreadyShown = castUsageRepository.hasShownPaywall()
+        if (!isPro.value && castCount >= FREE_CAST_LIMIT && !paywallAlreadyShown) {
+            castUsageRepository.markPaywallShown()
+            _showPurchaseScreen.value = true
+        }
+    }
+
+    private fun observePurchaseState() {
+        viewModelScope.launch {
+            isPro.collectLatest { purchased ->
+                if (purchased) {
+                    _showPurchaseScreen.value = false
+                }
+            }
+        }
+    }
+
+    override fun onCleared() {
+        billingManager.disconnect()
+        super.onCleared()
+    }
+
+    companion object {
+        private const val FREE_CAST_LIMIT = 2
     }
 }

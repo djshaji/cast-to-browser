@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -27,11 +28,13 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,6 +50,8 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
+import kotlinx.coroutines.flow.collectLatest
+import org.acoustixaudio.casttobrowser.About
 import org.acoustixaudio.casttobrowser.data.FolderEntry
 import org.acoustixaudio.casttobrowser.data.FolderLocation
 import org.acoustixaudio.casttobrowser.data.MediaItem
@@ -75,6 +80,7 @@ fun MediaListScreen(
     val serverError by viewModel.serverError.collectAsState()
     val currentMedia by viewModel.currentMedia.collectAsState()
     val telemetry by viewModel.telemetry.collectAsState()
+    val isPro by viewModel.isPro.collectAsState()
     val selectedFilter by viewModel.selectedFilter.collectAsState()
     val selectedSort by viewModel.selectedSort.collectAsState()
     val folderTreeUri by viewModel.folderTreeUri.collectAsState()
@@ -83,6 +89,14 @@ fun MediaListScreen(
     val folderLoading by viewModel.folderLoading.collectAsState()
     val folderError by viewModel.folderError.collectAsState()
     var selectedTab by rememberSaveable { mutableStateOf(MainTab.GALLERY) }
+    var menuExpanded by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(viewModel) {
+        viewModel.purchaseMessage.collectLatest { message ->
+            snackbarHostState.showSnackbar(message)
+        }
+    }
 
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -102,21 +116,77 @@ fun MediaListScreen(
     }
 
     Scaffold(
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState)
+        },
         topBar = {
             Column {
-                TopAppBar(
-                    title = { Text("Cast to Browser") },
-                    actions = {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isPro) {
+                            TextButton(
+                                onClick = { viewModel.restorePurchases() },
+                                modifier = Modifier.padding(end = 4.dp)
+                            ) {
+                                Badge {
+                                    Text("PRO")
+                                }
+                            }
+                        } else {
+                            TextButton(
+                                onClick = { viewModel.openPurchaseScreen() },
+                                modifier = Modifier.padding(end = 4.dp)
+                            ) {
+                                Text("Go Pro")
+                            }
+                        }
                         serverIp?.let {
                             Text(
                                 text = "http://$it:$serverPort",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(end = 16.dp)
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
-                )
+
+                    // Hamburger Menu
+                    Box {
+                        IconButton(onClick = { menuExpanded = !menuExpanded }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Restore Purchase") },
+                                onClick = {
+                                    menuExpanded = false
+                                    viewModel.restorePurchases()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("About") },
+                                onClick = {
+                                    menuExpanded = false
+                                    val intent = Intent(context, About::class.java)
+                                    context.startActivity(intent)
+                                }
+                            )
+                        }
+                    }
+                }
                 PrimaryTabRow(selectedTabIndex = selectedTab.ordinal) {
                     MainTab.entries.forEach { tab ->
                         Tab(
