@@ -49,4 +49,4 @@ The app strictly follows Material 3 guidelines, featuring:
 MIT License
 
 ---
-Developed with ❤️ by the Cast to Browser Team.
+Developed with ❤️ by djshaji

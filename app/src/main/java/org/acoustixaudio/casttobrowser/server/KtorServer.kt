@@ -3,6 +3,7 @@ package org.acoustixaudio.casttobrowser.server
 import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.provider.MediaStore
 import io.ktor.http.*
 import io.ktor.http.content.*
@@ -23,6 +24,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.acoustixaudio.casttobrowser.data.MediaType
 import kotlin.time.Duration.Companion.seconds
 
 @Serializable
@@ -59,8 +61,7 @@ class KtorServer(private val context: Context) {
         routing {
             get("/") {
                 val media = ServerState.currentMedia.value
-                val mediaUrl = media?.let { "/media/${it.id}" } ?: ""
-                val mediaType = media?.type?.name ?: ""
+                val mediaUrl = media?.let { "/media/${it.type.name.lowercase()}/${it.id}" } ?: ""
 
                 call.respondText(
                     """
@@ -82,7 +83,7 @@ class KtorServer(private val context: Context) {
                     <body>
                         <div id="container">
                             ${if (media == null) "<div id='no-media'>Waiting for media...</div>" else ""}
-                            ${if (media?.type == org.acoustixaudio.casttobrowser.data.MediaType.VIDEO) """<video id="player" controls autoplay><source src="$mediaUrl" type="video/mp4"></video>""" else if (media?.type == org.acoustixaudio.casttobrowser.data.MediaType.IMAGE) """<img id="player" src="$mediaUrl">""" else ""}
+                            ${if (media?.type == MediaType.VIDEO) """<video id="player" controls autoplay><source src="$mediaUrl" type="video/mp4"></video>""" else if (media?.type == MediaType.IMAGE) """<img id="player" src="$mediaUrl">""" else ""}
                             <div id="status">Disconnected</div>
                         </div>
 
@@ -174,40 +175,59 @@ class KtorServer(private val context: Context) {
                 )
             }
 
-            get("/media/{id}") {
+            get("/media/{type}/{id}") {
+                val mediaType = when (call.parameters["type"]?.lowercase()) {
+                    "video" -> MediaType.VIDEO
+                    "image" -> MediaType.IMAGE
+                    else -> null
+                }
                 val idString = call.parameters["id"]
                 val id = idString?.toLongOrNull()
-                if (id == null) {
+                if (mediaType == null || id == null) {
                     call.respond(HttpStatusCode.BadRequest, "Invalid Media ID")
                     return@get
                 }
 
-                // Try to find if it's a video or image
-                val videoUri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
-                val imageUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-
-                var uriToServe: Uri? = null
-                var contentType = ContentType.Video.Any
-
-                if (exists(videoUri)) {
-                    uriToServe = videoUri
-                    contentType = ContentType.Video.Any
-                } else if (exists(imageUri)) {
-                    uriToServe = imageUri
-                    contentType = ContentType.Image.Any
+                val resolvedMediaType = mediaType
+                val currentMedia = ServerState.currentMedia.value
+                val uriToServe = if (
+                    currentMedia != null &&
+                    currentMedia.id == id &&
+                    currentMedia.type == resolvedMediaType
+                ) {
+                    currentMedia.uri
+                } else if (resolvedMediaType == MediaType.VIDEO) {
+                    ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
+                } else {
+                    ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                }
+                val defaultContentType = if (resolvedMediaType == MediaType.VIDEO) {
+                    ContentType.Video.Any
+                } else {
+                    ContentType.Image.Any
                 }
 
-                if (uriToServe != null) {
+                if (exists(uriToServe)) {
                     try {
                         val descriptor = context.contentResolver.openAssetFileDescriptor(uriToServe, "r")
                         if (descriptor != null) {
-                            val length = descriptor.length
+                            val length = resolveContentLength(uriToServe, descriptor.length)
                             val inputStream = descriptor.createInputStream()
-                            call.respond(object : OutgoingContent.ReadChannelContent() {
-                                override val contentLength: Long = length
-                                override val contentType: ContentType = contentType
-                                override fun readFrom() = inputStream.toByteReadChannel()
-                            })
+                            val resolvedContentType = context.contentResolver.getType(uriToServe)
+                                ?.let(ContentType::parse)
+                                ?: defaultContentType
+                            if (length != null) {
+                                call.respond(object : OutgoingContent.ReadChannelContent() {
+                                    override val contentLength: Long = length
+                                    override val contentType: ContentType = resolvedContentType
+                                    override fun readFrom() = inputStream.toByteReadChannel()
+                                })
+                            } else {
+                                call.respond(object : OutgoingContent.ReadChannelContent() {
+                                    override val contentType: ContentType = resolvedContentType
+                                    override fun readFrom() = inputStream.toByteReadChannel()
+                                })
+                            }
                         } else {
                             call.respond(HttpStatusCode.NotFound)
                         }
@@ -256,6 +276,26 @@ class KtorServer(private val context: Context) {
         } catch (e: Exception) {
             false
         }
+    }
+
+    private fun resolveContentLength(uri: Uri, descriptorLength: Long): Long? {
+        if (descriptorLength >= 0) {
+            return descriptorLength
+        }
+
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (sizeIndex != -1 && !cursor.isNull(sizeIndex)) {
+                    val size = cursor.getLong(sizeIndex)
+                    if (size >= 0) {
+                        return size
+                    }
+                }
+            }
+        }
+
+        return null
     }
 
     fun stop() {

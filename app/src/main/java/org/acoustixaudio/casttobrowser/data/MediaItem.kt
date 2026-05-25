@@ -12,5 +12,6 @@ data class MediaItem(
     val uri: Uri,
     val type: MediaType,
     val duration: Long = 0,
-    val size: Long = 0
+    val size: Long = 0,
+    val modifiedTime: Long = 0
 )

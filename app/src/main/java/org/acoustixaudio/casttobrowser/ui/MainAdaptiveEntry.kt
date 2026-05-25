@@ -36,6 +36,7 @@ fun MainAdaptiveEntry(viewModel: MediaViewModel) {
         listPane = {
             MediaListScreen(
                 viewModel = viewModel,
+                isRemoteVisible = navigator.canNavigateBack(),
                 onShowRemote = {
                     coroutineScope.launch {
                         navigator.navigateTo(ListDetailPaneScaffoldRole.Detail)

@@ -74,6 +74,12 @@ class MainActivity : ComponentActivity() {
                         permissionsState.launchMultiplePermissionRequest()
                     }
 
+                    LaunchedEffect(permissionsState.allPermissionsGranted) {
+                        if (permissionsState.allPermissionsGranted) {
+                            viewModel.loadMedia()
+                        }
+                    }
+
                     Surface(
                         modifier = Modifier.fillMaxSize(),
                         color = MaterialTheme.colorScheme.background

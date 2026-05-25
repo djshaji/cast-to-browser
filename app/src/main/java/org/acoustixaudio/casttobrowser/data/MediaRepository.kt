@@ -16,7 +16,9 @@ class MediaRepository(private val context: Context) {
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DISPLAY_NAME,
             MediaStore.Video.Media.DURATION,
-            MediaStore.Video.Media.SIZE
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.DATE_ADDED,
+            MediaStore.Video.Media.DATE_MODIFIED
         )
 
         context.contentResolver.query(
@@ -30,15 +32,17 @@ class MediaRepository(private val context: Context) {
             val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
             val durationColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
             val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
+            val dateModifiedColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_MODIFIED)
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idColumn)
                 val name = cursor.getString(nameColumn)
                 val duration = cursor.getLong(durationColumn)
                 val size = cursor.getLong(sizeColumn)
+                val modifiedTime = cursor.getLong(dateModifiedColumn)
                 val contentUri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
 
-                mediaList.add(MediaItem(id, name, contentUri, MediaType.VIDEO, duration, size))
+                mediaList.add(MediaItem(id, name, contentUri, MediaType.VIDEO, duration, size, modifiedTime))
             }
         }
 
@@ -46,7 +50,9 @@ class MediaRepository(private val context: Context) {
         val imageProjection = arrayOf(
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DISPLAY_NAME,
-            MediaStore.Images.Media.SIZE
+            MediaStore.Images.Media.SIZE,
+            MediaStore.Images.Media.DATE_ADDED,
+            MediaStore.Images.Media.DATE_MODIFIED
         )
 
         context.contentResolver.query(
@@ -59,14 +65,16 @@ class MediaRepository(private val context: Context) {
             val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
             val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
             val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+            val dateModifiedColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idColumn)
                 val name = cursor.getString(nameColumn)
                 val size = cursor.getLong(sizeColumn)
+                val modifiedTime = cursor.getLong(dateModifiedColumn)
                 val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
 
-                mediaList.add(MediaItem(id, name, contentUri, MediaType.IMAGE, 0, size))
+                mediaList.add(MediaItem(id, name, contentUri, MediaType.IMAGE, 0, size, modifiedTime))
             }
         }
 
