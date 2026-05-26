@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
@@ -90,6 +91,7 @@ fun MediaListScreen(
     val folderError by viewModel.folderError.collectAsState()
     var selectedTab by rememberSaveable { mutableStateOf(MainTab.GALLERY) }
     var menuExpanded by remember { mutableStateOf(false) }
+    var sectionMenuExpanded by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel) {
@@ -149,6 +151,29 @@ fun MediaListScreen(
                                 Text("Go Pro")
                             }
                         }
+                        Box(modifier = Modifier.padding(end = 8.dp)) {
+                            TextButton(onClick = { sectionMenuExpanded = true }) {
+                                Text(selectedTab.label)
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "Select section"
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = sectionMenuExpanded,
+                                onDismissRequest = { sectionMenuExpanded = false }
+                            ) {
+                                MainTab.entries.forEach { tab ->
+                                    DropdownMenuItem(
+                                        text = { Text(menuItemLabel(tab.label, selectedTab == tab)) },
+                                        onClick = {
+                                            selectedTab = tab
+                                            sectionMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                         serverIp?.let {
                             Text(
                                 text = "http://$it:$serverPort",
@@ -169,6 +194,15 @@ fun MediaListScreen(
                             expanded = menuExpanded,
                             onDismissRequest = { menuExpanded = false }
                         ) {
+                            if (!isPro) {
+                                DropdownMenuItem(
+                                    text = { Text("Go Pro") },
+                                    onClick = {
+                                        menuExpanded = false
+                                        viewModel.openPurchaseScreen()
+                                    }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Restore Purchase") },
                                 onClick = {
@@ -176,6 +210,48 @@ fun MediaListScreen(
                                     viewModel.restorePurchases()
                                 }
                             )
+                            if (selectedTab == MainTab.GALLERY) {
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(menuItemLabel("Show all", selectedFilter == MediaFilter.ALL))
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        viewModel.updateFilter(MediaFilter.ALL)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(menuItemLabel("Images", selectedFilter == MediaFilter.IMAGES))
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        viewModel.updateFilter(MediaFilter.IMAGES)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(menuItemLabel("Videos", selectedFilter == MediaFilter.VIDEOS))
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        viewModel.updateFilter(MediaFilter.VIDEOS)
+                                    }
+                                )
+                                HorizontalDivider()
+                                MediaSort.entries.forEach { sort ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(menuItemLabel("Sort by ${sort.label}", selectedSort == sort))
+                                        },
+                                        onClick = {
+                                            menuExpanded = false
+                                            viewModel.updateSort(sort)
+                                        }
+                                    )
+                                }
+                            }
                             DropdownMenuItem(
                                 text = { Text("About") },
                                 onClick = {
@@ -187,42 +263,7 @@ fun MediaListScreen(
                         }
                     }
                 }
-                PrimaryTabRow(selectedTabIndex = selectedTab.ordinal) {
-                    MainTab.entries.forEach { tab ->
-                        Tab(
-                            selected = selectedTab == tab,
-                            onClick = { selectedTab = tab },
-                            text = { Text(tab.label) }
-                        )
-                    }
-                }
-                if (selectedTab == MainTab.GALLERY) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        MediaDropdown(
-                            label = "Show",
-                            selectedOption = selectedFilter.label,
-                            options = MediaFilter.entries.map { it.label },
-                            onOptionSelected = { label ->
-                                viewModel.updateFilter(MediaFilter.entries.first { it.label == label })
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                        MediaDropdown(
-                            label = "Sort",
-                            selectedOption = selectedSort.label,
-                            options = MediaSort.entries.map { it.label },
-                            onOptionSelected = { label ->
-                                viewModel.updateSort(MediaSort.entries.first { it.label == label })
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                } else {
+                if (selectedTab != MainTab.GALLERY) {
                     FolderToolbar(
                         path = folderPath,
                         canNavigateUp = folderPath.size > 1,
@@ -466,55 +507,8 @@ private fun FolderToolbar(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun MediaDropdown(
-    label: String,
-    selectedOption: String,
-    options: List<String>,
-    onOptionSelected: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = !expanded },
-        modifier = modifier
-    ) {
-        OutlinedTextField(
-            value = selectedOption,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier
-                .menuAnchor()
-                .fillMaxWidth(),
-            maxLines = 1
-        )
-
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            text = option,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    },
-                    onClick = {
-                        onOptionSelected(option)
-                        expanded = false
-                    }
-                )
-            }
-        }
-    }
+private fun menuItemLabel(label: String, selected: Boolean): String {
+    return if (selected) "Current: $label" else label
 }
 
 @Composable
