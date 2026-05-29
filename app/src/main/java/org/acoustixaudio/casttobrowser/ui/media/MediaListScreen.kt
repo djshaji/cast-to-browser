@@ -47,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
@@ -57,13 +58,17 @@ import org.acoustixaudio.casttobrowser.data.FolderEntry
 import org.acoustixaudio.casttobrowser.data.FolderLocation
 import org.acoustixaudio.casttobrowser.data.MediaItem
 import org.acoustixaudio.casttobrowser.data.MediaType
+import org.acoustixaudio.casttobrowser.data.SmbConnection
+import org.acoustixaudio.casttobrowser.data.WebDavConnection
 import org.acoustixaudio.casttobrowser.ui.viewmodel.MediaFilter
 import org.acoustixaudio.casttobrowser.ui.viewmodel.MediaSort
 import org.acoustixaudio.casttobrowser.ui.viewmodel.MediaViewModel
 
 private enum class MainTab(val label: String) {
     GALLERY("Gallery"),
-    FOLDERS("Folders")
+    FOLDERS("Folders"),
+    SMB("SMB"),
+    WEBDAV("WebDAV")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -89,9 +94,29 @@ fun MediaListScreen(
     val folderEntries by viewModel.folderEntries.collectAsState()
     val folderLoading by viewModel.folderLoading.collectAsState()
     val folderError by viewModel.folderError.collectAsState()
+    val smbConnection by viewModel.smbConnection.collectAsState()
+    val smbPath by viewModel.smbPath.collectAsState()
+    val smbEntries by viewModel.smbEntries.collectAsState()
+    val smbLoading by viewModel.smbLoading.collectAsState()
+    val smbError by viewModel.smbError.collectAsState()
+    val webDavConnection by viewModel.webDavConnection.collectAsState()
+    val webDavPath by viewModel.webDavPath.collectAsState()
+    val webDavEntries by viewModel.webDavEntries.collectAsState()
+    val webDavLoading by viewModel.webDavLoading.collectAsState()
+    val webDavError by viewModel.webDavError.collectAsState()
     var selectedTab by rememberSaveable { mutableStateOf(MainTab.GALLERY) }
     var menuExpanded by remember { mutableStateOf(false) }
     var sectionMenuExpanded by remember { mutableStateOf(false) }
+    var showSmbDialog by rememberSaveable { mutableStateOf(false) }
+    var smbServer by rememberSaveable { mutableStateOf("") }
+    var smbShare by rememberSaveable { mutableStateOf("") }
+    var smbUsername by rememberSaveable { mutableStateOf("") }
+    var smbPassword by rememberSaveable { mutableStateOf("") }
+    var smbDomain by rememberSaveable { mutableStateOf("") }
+    var showWebDavDialog by rememberSaveable { mutableStateOf(false) }
+    var webDavUrl by rememberSaveable { mutableStateOf("") }
+    var webDavUsername by rememberSaveable { mutableStateOf("") }
+    var webDavPassword by rememberSaveable { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel) {
@@ -115,6 +140,22 @@ fun MediaListScreen(
                 viewModel.setFolderError(error.message ?: "Could not open the selected folder.")
             }
         }
+    }
+
+    fun openWebDavDialog() {
+        webDavUrl = webDavConnection?.baseUrl.orEmpty()
+        webDavUsername = webDavConnection?.username.orEmpty()
+        webDavPassword = webDavConnection?.password.orEmpty()
+        showWebDavDialog = true
+    }
+
+    fun openSmbDialog() {
+        smbServer = smbConnection?.server.orEmpty()
+        smbShare = smbConnection?.share.orEmpty()
+        smbUsername = smbConnection?.username.orEmpty()
+        smbPassword = smbConnection?.password.orEmpty()
+        smbDomain = smbConnection?.domain.orEmpty()
+        showSmbDialog = true
     }
 
     Scaffold(
@@ -263,13 +304,36 @@ fun MediaListScreen(
                         }
                     }
                 }
-                if (selectedTab != MainTab.GALLERY) {
-                    FolderToolbar(
-                        path = folderPath,
-                        canNavigateUp = folderPath.size > 1,
-                        onPickFolder = { folderPicker.launch(folderTreeUri) },
-                        onNavigateUp = { viewModel.navigateUpFolder() }
-                    )
+                when (selectedTab) {
+                    MainTab.FOLDERS -> {
+                        FolderToolbar(
+                            path = folderPath,
+                            canNavigateUp = folderPath.size > 1,
+                            onPickFolder = { folderPicker.launch(folderTreeUri) },
+                            onNavigateUp = { viewModel.navigateUpFolder() }
+                        )
+                    }
+                    MainTab.SMB -> {
+                        SmbToolbar(
+                            connection = smbConnection,
+                            path = smbPath,
+                            canNavigateUp = smbPath.size > 1,
+                            onConnect = { openSmbDialog() },
+                            onDisconnect = { viewModel.disconnectSmb() },
+                            onNavigateUp = { viewModel.navigateUpSmb() }
+                        )
+                    }
+                    MainTab.WEBDAV -> {
+                        WebDavToolbar(
+                            connection = webDavConnection,
+                            path = webDavPath,
+                            canNavigateUp = webDavPath.size > 1,
+                            onConnect = { openWebDavDialog() },
+                            onDisconnect = { viewModel.disconnectWebDav() },
+                            onNavigateUp = { viewModel.navigateUpWebDav() }
+                        )
+                    }
+                    MainTab.GALLERY -> Unit
                 }
             }
         },
@@ -306,7 +370,7 @@ fun MediaListScreen(
                         onShowRemote()
                     }
                 )
-            } else {
+            } else if (selectedTab == MainTab.FOLDERS) {
                 FolderBrowserContent(
                     folderTreeSelected = folderTreeUri != null,
                     folderPath = folderPath,
@@ -326,8 +390,102 @@ fun MediaListScreen(
                     },
                     modifier = Modifier.fillMaxSize()
                 )
+            } else if (selectedTab == MainTab.SMB) {
+                SmbContent(
+                    isConfigured = smbConnection != null,
+                    path = smbPath,
+                    entries = smbEntries,
+                    isLoading = smbLoading,
+                    errorMessage = smbError,
+                    isRemoteVisible = isRemoteVisible,
+                    onConnect = { openSmbDialog() },
+                    onNavigateUp = { viewModel.navigateUpSmb() },
+                    onDisconnect = { viewModel.disconnectSmb() },
+                    onSelectEntry = { entry ->
+                        if (entry.isDirectory) {
+                            viewModel.navigateIntoSmb(entry)
+                        } else {
+                            viewModel.selectSmbEntry(entry)
+                            onShowRemote()
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                WebDavContent(
+                    isConfigured = webDavConnection != null,
+                    path = webDavPath,
+                    entries = webDavEntries,
+                    isLoading = webDavLoading,
+                    errorMessage = webDavError,
+                    isRemoteVisible = isRemoteVisible,
+                    onConnect = { openWebDavDialog() },
+                    onNavigateUp = { viewModel.navigateUpWebDav() },
+                    onDisconnect = { viewModel.disconnectWebDav() },
+                    onSelectEntry = { entry ->
+                        if (entry.isDirectory) {
+                            viewModel.navigateIntoWebDav(entry)
+                        } else {
+                            viewModel.selectWebDavEntry(entry)
+                            onShowRemote()
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
             }
         }
+    }
+
+    if (showSmbDialog) {
+        SmbConnectionDialog(
+            initialConnection = SmbConnection(
+                server = smbServer,
+                share = smbShare,
+                username = smbUsername,
+                password = smbPassword,
+                domain = smbDomain
+            ),
+            onDismiss = { showSmbDialog = false },
+            onConnect = { connection ->
+                smbServer = connection.server
+                smbShare = connection.share
+                smbUsername = connection.username
+                smbPassword = connection.password
+                smbDomain = connection.domain
+                showSmbDialog = false
+                selectedTab = MainTab.SMB
+                viewModel.connectSmb(
+                    server = connection.server,
+                    share = connection.share,
+                    username = connection.username,
+                    password = connection.password,
+                    domain = connection.domain
+                )
+            }
+        )
+    }
+
+    if (showWebDavDialog) {
+        WebDavConnectionDialog(
+            initialConnection = WebDavConnection(
+                baseUrl = webDavUrl,
+                username = webDavUsername,
+                password = webDavPassword
+            ),
+            onDismiss = { showWebDavDialog = false },
+            onConnect = { connection ->
+                webDavUrl = connection.baseUrl
+                webDavUsername = connection.username
+                webDavPassword = connection.password
+                showWebDavDialog = false
+                selectedTab = MainTab.WEBDAV
+                viewModel.connectWebDav(
+                    baseUrl = connection.baseUrl,
+                    username = connection.username,
+                    password = connection.password
+                )
+            }
+        )
     }
 }
 
@@ -439,10 +597,258 @@ private fun FolderBrowserContent(
 }
 
 @Composable
+private fun SmbToolbar(
+    connection: SmbConnection?,
+    path: List<FolderLocation>,
+    canNavigateUp: Boolean,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+    onNavigateUp: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilledTonalButton(onClick = onConnect) {
+                Text(if (connection == null) "Connect" else "Reconnect")
+            }
+            if (connection != null) {
+                FilledTonalButton(onClick = onDisconnect) {
+                    Text("Disconnect")
+                }
+            }
+            if (canNavigateUp) {
+                FilledTonalButton(onClick = onNavigateUp) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowUp,
+                        contentDescription = "Up"
+                    )
+                    Spacer(modifier = Modifier.size(4.dp))
+                    Text("Up")
+                }
+            }
+        }
+        if (path.isNotEmpty()) {
+            Text(
+                text = path.joinToString(" / ") { it.name },
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun SmbContent(
+    isConfigured: Boolean,
+    path: List<FolderLocation>,
+    entries: List<FolderEntry>,
+    isLoading: Boolean,
+    errorMessage: String?,
+    isRemoteVisible: Boolean,
+    onConnect: () -> Unit,
+    onNavigateUp: () -> Unit,
+    onDisconnect: () -> Unit,
+    onSelectEntry: (FolderEntry) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    BackHandler(enabled = path.size > 1 && !isRemoteVisible) {
+        onNavigateUp()
+    }
+
+    when {
+        !isConfigured -> {
+            EmptyFolderState(
+                message = "Connect to an SMB server to browse remote media.",
+                buttonLabel = "Connect",
+                onButtonClick = onConnect,
+                modifier = modifier
+            )
+        }
+
+        isLoading -> {
+            Box(modifier = modifier) {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            }
+        }
+
+        errorMessage != null -> {
+            EmptyFolderState(
+                message = errorMessage,
+                buttonLabel = "Reconnect",
+                onButtonClick = onConnect,
+                secondaryButtonLabel = "Disconnect",
+                onSecondaryButtonClick = onDisconnect,
+                modifier = modifier
+            )
+        }
+
+        entries.isEmpty() -> {
+            EmptyFolderState(
+                message = "No folders or supported media found on this SMB server.",
+                buttonLabel = "Reconnect",
+                onButtonClick = onConnect,
+                secondaryButtonLabel = "Disconnect",
+                onSecondaryButtonClick = onDisconnect,
+                modifier = modifier
+            )
+        }
+
+        else -> {
+            LazyColumn(
+                modifier = modifier,
+                contentPadding = PaddingValues(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(entries, key = { it.uri.toString() }) { entry ->
+                    FolderEntryRow(
+                        entry = entry,
+                        onClick = { onSelectEntry(entry) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WebDavToolbar(
+    connection: WebDavConnection?,
+    path: List<FolderLocation>,
+    canNavigateUp: Boolean,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+    onNavigateUp: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilledTonalButton(onClick = onConnect) {
+                Text(if (connection == null) "Connect" else "Reconnect")
+            }
+            if (connection != null) {
+                FilledTonalButton(onClick = onDisconnect) {
+                    Text("Disconnect")
+                }
+            }
+            if (canNavigateUp) {
+                FilledTonalButton(onClick = onNavigateUp) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowUp,
+                        contentDescription = "Up"
+                    )
+                    Spacer(modifier = Modifier.size(4.dp))
+                    Text("Up")
+                }
+            }
+        }
+        if (path.isNotEmpty()) {
+            Text(
+                text = path.joinToString(" / ") { it.name },
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun WebDavContent(
+    isConfigured: Boolean,
+    path: List<FolderLocation>,
+    entries: List<FolderEntry>,
+    isLoading: Boolean,
+    errorMessage: String?,
+    isRemoteVisible: Boolean,
+    onConnect: () -> Unit,
+    onNavigateUp: () -> Unit,
+    onDisconnect: () -> Unit,
+    onSelectEntry: (FolderEntry) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    BackHandler(enabled = path.size > 1 && !isRemoteVisible) {
+        onNavigateUp()
+    }
+
+    when {
+        !isConfigured -> {
+            EmptyFolderState(
+                message = "Connect to a WebDAV server to browse remote media.",
+                buttonLabel = "Connect",
+                onButtonClick = onConnect,
+                modifier = modifier
+            )
+        }
+
+        isLoading -> {
+            Box(modifier = modifier) {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            }
+        }
+
+        errorMessage != null -> {
+            EmptyFolderState(
+                message = errorMessage,
+                buttonLabel = "Reconnect",
+                onButtonClick = onConnect,
+                secondaryButtonLabel = "Disconnect",
+                onSecondaryButtonClick = onDisconnect,
+                modifier = modifier
+            )
+        }
+
+        entries.isEmpty() -> {
+            EmptyFolderState(
+                message = "No folders or supported media found on this WebDAV server.",
+                buttonLabel = "Reconnect",
+                onButtonClick = onConnect,
+                secondaryButtonLabel = "Disconnect",
+                onSecondaryButtonClick = onDisconnect,
+                modifier = modifier
+            )
+        }
+
+        else -> {
+            LazyColumn(
+                modifier = modifier,
+                contentPadding = PaddingValues(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(entries, key = { it.uri.toString() }) { entry ->
+                    FolderEntryRow(
+                        entry = entry,
+                        onClick = { onSelectEntry(entry) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun EmptyFolderState(
     message: String,
     buttonLabel: String,
     onButtonClick: () -> Unit,
+    secondaryButtonLabel: String? = null,
+    onSecondaryButtonClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier) {
@@ -457,11 +863,160 @@ private fun EmptyFolderState(
                 text = message,
                 style = MaterialTheme.typography.bodyLarge
             )
-            Button(onClick = onButtonClick) {
-                Text(buttonLabel)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = onButtonClick) {
+                    Text(buttonLabel)
+                }
+                if (secondaryButtonLabel != null && onSecondaryButtonClick != null) {
+                    OutlinedButton(onClick = onSecondaryButtonClick) {
+                        Text(secondaryButtonLabel)
+                    }
+                }
             }
         }
     }
+}
+
+@Composable
+private fun SmbConnectionDialog(
+    initialConnection: SmbConnection,
+    onDismiss: () -> Unit,
+    onConnect: (SmbConnection) -> Unit
+) {
+    var server by rememberSaveable(initialConnection.server) { mutableStateOf(initialConnection.server) }
+    var share by rememberSaveable(initialConnection.share) { mutableStateOf(initialConnection.share) }
+    var username by rememberSaveable(initialConnection.username) { mutableStateOf(initialConnection.username) }
+    var password by rememberSaveable(initialConnection.password) { mutableStateOf(initialConnection.password) }
+    var domain by rememberSaveable(initialConnection.domain) { mutableStateOf(initialConnection.domain) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Connect to SMB") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = server,
+                    onValueChange = { server = it },
+                    label = { Text("Server") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = share,
+                    onValueChange = { share = it },
+                    label = { Text("Share (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text("Username") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = domain,
+                    onValueChange = { domain = it },
+                    label = { Text("Domain / Workgroup") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onConnect(
+                        SmbConnection(
+                            server = server.trim(),
+                            share = share.trim(),
+                            username = username.trim(),
+                            password = password,
+                            domain = domain.trim()
+                        )
+                    )
+                }
+            ) {
+                Text("Connect")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+private fun WebDavConnectionDialog(
+    initialConnection: WebDavConnection,
+    onDismiss: () -> Unit,
+    onConnect: (WebDavConnection) -> Unit
+) {
+    var url by rememberSaveable(initialConnection.baseUrl) { mutableStateOf(initialConnection.baseUrl) }
+    var username by rememberSaveable(initialConnection.username) { mutableStateOf(initialConnection.username) }
+    var password by rememberSaveable(initialConnection.password) { mutableStateOf(initialConnection.password) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Connect to WebDAV") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Server URL") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text("Username") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onConnect(
+                        WebDavConnection(
+                            baseUrl = url.trim(),
+                            username = username.trim(),
+                            password = password
+                        )
+                    )
+                }
+            ) {
+                Text("Connect")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable

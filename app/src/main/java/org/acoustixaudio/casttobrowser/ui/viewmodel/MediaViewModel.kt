@@ -17,6 +17,12 @@ import org.acoustixaudio.casttobrowser.data.FolderLocation
 import org.acoustixaudio.casttobrowser.data.MediaItem
 import org.acoustixaudio.casttobrowser.data.MediaRepository
 import org.acoustixaudio.casttobrowser.data.MediaType
+import org.acoustixaudio.casttobrowser.data.SmbConnection
+import org.acoustixaudio.casttobrowser.data.SmbRemoteAccess
+import org.acoustixaudio.casttobrowser.data.SmbRepository
+import org.acoustixaudio.casttobrowser.data.WebDavConnection
+import org.acoustixaudio.casttobrowser.data.WebDavRemoteAccess
+import org.acoustixaudio.casttobrowser.data.WebDavRepository
 import org.acoustixaudio.casttobrowser.server.ControlMessage
 import org.acoustixaudio.casttobrowser.server.ServerState
 
@@ -35,6 +41,8 @@ enum class MediaSort(val label: String) {
 class MediaViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = MediaRepository(application)
     private val folderRepository = FolderBrowserRepository(application)
+    private val smbRepository = SmbRepository(application)
+    private val webDavRepository = WebDavRepository(application)
     private val castUsageRepository = CastUsageRepository(application)
     private val billingManager = BillingManager(application)
     private var allMediaItems: List<MediaItem> = emptyList()
@@ -66,6 +74,36 @@ class MediaViewModel(application: Application) : AndroidViewModel(application) {
     private val _folderError = MutableStateFlow<String?>(null)
     val folderError = _folderError.asStateFlow()
 
+    private val _webDavConnection = MutableStateFlow<WebDavConnection?>(null)
+    val webDavConnection = _webDavConnection.asStateFlow()
+
+    private val _webDavPath = MutableStateFlow<List<FolderLocation>>(emptyList())
+    val webDavPath = _webDavPath.asStateFlow()
+
+    private val _webDavEntries = MutableStateFlow<List<FolderEntry>>(emptyList())
+    val webDavEntries = _webDavEntries.asStateFlow()
+
+    private val _webDavLoading = MutableStateFlow(false)
+    val webDavLoading = _webDavLoading.asStateFlow()
+
+    private val _webDavError = MutableStateFlow<String?>(null)
+    val webDavError = _webDavError.asStateFlow()
+
+    private val _smbConnection = MutableStateFlow<SmbConnection?>(null)
+    val smbConnection = _smbConnection.asStateFlow()
+
+    private val _smbPath = MutableStateFlow<List<FolderLocation>>(emptyList())
+    val smbPath = _smbPath.asStateFlow()
+
+    private val _smbEntries = MutableStateFlow<List<FolderEntry>>(emptyList())
+    val smbEntries = _smbEntries.asStateFlow()
+
+    private val _smbLoading = MutableStateFlow(false)
+    val smbLoading = _smbLoading.asStateFlow()
+
+    private val _smbError = MutableStateFlow<String?>(null)
+    val smbError = _smbError.asStateFlow()
+
     private val _showPurchaseScreen = MutableStateFlow(false)
     val showPurchaseScreen = _showPurchaseScreen.asStateFlow()
 
@@ -82,6 +120,8 @@ class MediaViewModel(application: Application) : AndroidViewModel(application) {
     init {
         loadMedia()
         restoreFolderTree()
+        restoreSmbConnection()
+        restoreWebDavConnection()
         billingManager.connect()
         observePurchaseState()
     }
@@ -173,6 +213,211 @@ class MediaViewModel(application: Application) : AndroidViewModel(application) {
         _folderError.value = message
     }
 
+    fun connectWebDav(baseUrl: String, username: String, password: String) {
+        viewModelScope.launch {
+            _webDavLoading.value = true
+            try {
+                val connection = webDavRepository.normalizeConnection(
+                    WebDavConnection(
+                        baseUrl = baseUrl,
+                        username = username.trim(),
+                        password = password
+                    )
+                )
+                _webDavConnection.value = connection
+                val rootLocation = webDavRepository.getRootLocation(connection)
+                _webDavPath.value = listOf(rootLocation)
+                _webDavEntries.value = webDavRepository.getChildren(connection, rootLocation.uri)
+                _webDavError.value = null
+                webDavRepository.persistConnection(connection)
+            } catch (error: IllegalArgumentException) {
+                _webDavPath.value = emptyList()
+                _webDavEntries.value = emptyList()
+                _webDavError.value = error.message ?: "Enter a valid WebDAV URL."
+            } catch (error: Exception) {
+                _webDavPath.value = emptyList()
+                _webDavEntries.value = emptyList()
+                _webDavError.value = error.message ?: "Could not connect to the WebDAV server."
+            } finally {
+                _webDavLoading.value = false
+            }
+        }
+    }
+
+    fun disconnectWebDav() {
+        viewModelScope.launch {
+            webDavRepository.clearPersistedConnection()
+            _webDavConnection.value = null
+            _webDavPath.value = emptyList()
+            _webDavEntries.value = emptyList()
+            _webDavError.value = null
+            _webDavLoading.value = false
+        }
+    }
+
+    fun navigateIntoWebDav(entry: FolderEntry) {
+        if (!entry.isDirectory) return
+        val connection = _webDavConnection.value ?: return
+
+        viewModelScope.launch {
+            _webDavLoading.value = true
+            try {
+                _webDavEntries.value = webDavRepository.getChildren(connection, entry.uri)
+                _webDavPath.value = _webDavPath.value + FolderLocation(entry.name, entry.uri)
+                _webDavError.value = null
+            } catch (error: Exception) {
+                _webDavError.value = error.message ?: "Could not open this WebDAV folder."
+            } finally {
+                _webDavLoading.value = false
+            }
+        }
+    }
+
+    fun navigateUpWebDav() {
+        val connection = _webDavConnection.value ?: return
+        val currentPath = _webDavPath.value
+        if (currentPath.size <= 1) return
+        val targetPath = currentPath.dropLast(1)
+        val targetFolder = targetPath.last()
+
+        viewModelScope.launch {
+            _webDavLoading.value = true
+            try {
+                _webDavEntries.value = webDavRepository.getChildren(connection, targetFolder.uri)
+                _webDavPath.value = targetPath
+                _webDavError.value = null
+            } catch (error: Exception) {
+                _webDavError.value = error.message ?: "Could not open this WebDAV folder."
+            } finally {
+                _webDavLoading.value = false
+            }
+        }
+    }
+
+    fun selectWebDavEntry(entry: FolderEntry) {
+        val mediaType = entry.mediaType ?: return
+        val connection = _webDavConnection.value ?: return
+        selectMedia(
+            MediaItem(
+                id = stableUriId(entry.uri),
+                name = entry.name,
+                uri = entry.uri,
+                type = mediaType,
+                size = entry.size,
+                modifiedTime = entry.modifiedTime,
+                mimeType = entry.mimeType,
+                remoteAccess = WebDavRemoteAccess(
+                    username = connection.username,
+                    password = connection.password
+                )
+            )
+        )
+    }
+
+    fun connectSmb(server: String, share: String, username: String, password: String, domain: String) {
+        viewModelScope.launch {
+            _smbLoading.value = true
+            try {
+                val connection = smbRepository.normalizeConnection(
+                    SmbConnection(
+                        server = server,
+                        share = share,
+                        username = username,
+                        password = password,
+                        domain = domain
+                    )
+                )
+                _smbConnection.value = connection
+                val rootLocation = smbRepository.getRootLocation(connection)
+                _smbPath.value = listOf(rootLocation)
+                _smbEntries.value = smbRepository.getChildren(connection, rootLocation.uri)
+                _smbError.value = null
+                smbRepository.persistConnection(connection)
+            } catch (error: IllegalArgumentException) {
+                _smbPath.value = emptyList()
+                _smbEntries.value = emptyList()
+                _smbError.value = error.message ?: "Enter a valid SMB server."
+            } catch (error: Exception) {
+                _smbPath.value = emptyList()
+                _smbEntries.value = emptyList()
+                _smbError.value = error.message ?: "Could not connect to the SMB server."
+            } finally {
+                _smbLoading.value = false
+            }
+        }
+    }
+
+    fun disconnectSmb() {
+        viewModelScope.launch {
+            smbRepository.clearPersistedConnection()
+            _smbConnection.value = null
+            _smbPath.value = emptyList()
+            _smbEntries.value = emptyList()
+            _smbError.value = null
+            _smbLoading.value = false
+        }
+    }
+
+    fun navigateIntoSmb(entry: FolderEntry) {
+        if (!entry.isDirectory) return
+        val connection = _smbConnection.value ?: return
+
+        viewModelScope.launch {
+            _smbLoading.value = true
+            try {
+                _smbEntries.value = smbRepository.getChildren(connection, entry.uri)
+                _smbPath.value = _smbPath.value + FolderLocation(entry.name, entry.uri)
+                _smbError.value = null
+            } catch (error: Exception) {
+                _smbError.value = error.message ?: "Could not open this SMB folder."
+            } finally {
+                _smbLoading.value = false
+            }
+        }
+    }
+
+    fun navigateUpSmb() {
+        val connection = _smbConnection.value ?: return
+        val currentPath = _smbPath.value
+        if (currentPath.size <= 1) return
+        val targetPath = currentPath.dropLast(1)
+        val targetFolder = targetPath.last()
+
+        viewModelScope.launch {
+            _smbLoading.value = true
+            try {
+                _smbEntries.value = smbRepository.getChildren(connection, targetFolder.uri)
+                _smbPath.value = targetPath
+                _smbError.value = null
+            } catch (error: Exception) {
+                _smbError.value = error.message ?: "Could not open this SMB folder."
+            } finally {
+                _smbLoading.value = false
+            }
+        }
+    }
+
+    fun selectSmbEntry(entry: FolderEntry) {
+        val mediaType = entry.mediaType ?: return
+        val connection = _smbConnection.value ?: return
+        selectMedia(
+            MediaItem(
+                id = stableUriId(entry.uri),
+                name = entry.name,
+                uri = entry.uri,
+                type = mediaType,
+                size = entry.size,
+                modifiedTime = entry.modifiedTime,
+                mimeType = entry.mimeType,
+                remoteAccess = SmbRemoteAccess(
+                    domain = connection.domain,
+                    username = connection.username,
+                    password = connection.password
+                )
+            )
+        )
+    }
+
     fun selectMedia(media: MediaItem) {
         viewModelScope.launch {
             maybeShowPurchaseScreen()
@@ -233,6 +478,46 @@ class MediaViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val persistedTreeUri = folderRepository.getPersistedTreeUri() ?: return@launch
             openFolderTree(persistedTreeUri)
+        }
+    }
+
+    private fun restoreSmbConnection() {
+        viewModelScope.launch {
+            val persistedConnection = smbRepository.getPersistedConnection() ?: return@launch
+            _smbConnection.value = persistedConnection
+            _smbLoading.value = true
+            try {
+                val rootLocation = smbRepository.getRootLocation(persistedConnection)
+                _smbPath.value = listOf(rootLocation)
+                _smbEntries.value = smbRepository.getChildren(persistedConnection, rootLocation.uri)
+                _smbError.value = null
+            } catch (error: Exception) {
+                _smbPath.value = emptyList()
+                _smbEntries.value = emptyList()
+                _smbError.value = error.message ?: "Could not reconnect to the SMB server."
+            } finally {
+                _smbLoading.value = false
+            }
+        }
+    }
+
+    private fun restoreWebDavConnection() {
+        viewModelScope.launch {
+            val persistedConnection = webDavRepository.getPersistedConnection() ?: return@launch
+            _webDavConnection.value = persistedConnection
+            _webDavLoading.value = true
+            try {
+                val rootLocation = webDavRepository.getRootLocation(persistedConnection)
+                _webDavPath.value = listOf(rootLocation)
+                _webDavEntries.value = webDavRepository.getChildren(persistedConnection, rootLocation.uri)
+                _webDavError.value = null
+            } catch (error: Exception) {
+                _webDavPath.value = emptyList()
+                _webDavEntries.value = emptyList()
+                _webDavError.value = error.message ?: "Could not reconnect to the WebDAV server."
+            } finally {
+                _webDavLoading.value = false
+            }
         }
     }
 

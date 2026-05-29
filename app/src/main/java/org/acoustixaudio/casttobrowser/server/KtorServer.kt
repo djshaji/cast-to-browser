@@ -24,7 +24,15 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okhttp3.Credentials
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.acoustixaudio.casttobrowser.data.MediaType
+import org.acoustixaudio.casttobrowser.data.SmbConnection
+import org.acoustixaudio.casttobrowser.data.SmbRemoteAccess
+import org.acoustixaudio.casttobrowser.data.SmbRepository
+import org.acoustixaudio.casttobrowser.data.WebDavRemoteAccess
+import java.io.EOFException
 import kotlin.time.Duration.Companion.seconds
 
 @Serializable
@@ -32,6 +40,8 @@ data class ControlMessage(val type: String, val data: String? = null)
 
 class KtorServer(private val context: Context) {
     private var server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>? = null
+    private val httpClient = OkHttpClient()
+    private val smbRepository = SmbRepository(context)
 
     /**
      * Starts the server on the specified port.
@@ -207,6 +217,16 @@ class KtorServer(private val context: Context) {
                     ContentType.Image.Any
                 }
 
+                if (
+                    currentMedia != null &&
+                    currentMedia.id == id &&
+                    currentMedia.type == resolvedMediaType &&
+                    isRemoteUri(currentMedia.uri)
+                ) {
+                    proxyRemoteMedia(call, currentMedia, defaultContentType)
+                    return@get
+                }
+
                 if (exists(uriToServe)) {
                     try {
                         val descriptor = context.contentResolver.openAssetFileDescriptor(uriToServe, "r")
@@ -298,7 +318,175 @@ class KtorServer(private val context: Context) {
         return null
     }
 
+    private suspend fun proxyRemoteMedia(
+        call: ApplicationCall,
+        media: org.acoustixaudio.casttobrowser.data.MediaItem,
+        defaultContentType: ContentType
+    ) {
+        when (val access = media.remoteAccess) {
+            is SmbRemoteAccess -> proxySmbMedia(call, media.uri, access, media.mimeType, defaultContentType)
+            is WebDavRemoteAccess, null -> proxyHttpMedia(call, media.uri, access as? WebDavRemoteAccess, media.mimeType, defaultContentType)
+        }
+    }
+
+    private suspend fun proxyHttpMedia(
+        call: ApplicationCall,
+        uri: Uri,
+        access: WebDavRemoteAccess?,
+        declaredMimeType: String,
+        defaultContentType: ContentType
+    ) {
+        val request = Request.Builder()
+            .url(uri.toString())
+            .get()
+            .apply {
+                call.request.headers[HttpHeaders.Range]?.let { header(HttpHeaders.Range, it) }
+                if (access != null && (access.username.isNotBlank() || access.password.isNotBlank())) {
+                    header(HttpHeaders.Authorization, Credentials.basic(access.username, access.password))
+                }
+            }
+            .build()
+
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful && response.code != HttpStatusCode.PartialContent.value) {
+                call.respond(
+                    HttpStatusCode.fromValue(response.code),
+                    response.message.ifBlank { "Could not fetch remote media." }
+                )
+                return
+            }
+
+            val body = response.body ?: run {
+                call.respond(HttpStatusCode.BadGateway, "Remote server returned an empty body.")
+                return
+            }
+
+            response.header(HttpHeaders.AcceptRanges)?.let {
+                call.response.headers.append(HttpHeaders.AcceptRanges, it)
+            }
+            response.header(HttpHeaders.ContentRange)?.let {
+                call.response.headers.append(HttpHeaders.ContentRange, it)
+            }
+            response.header(HttpHeaders.ContentLength)?.let {
+                call.response.headers.append(HttpHeaders.ContentLength, it)
+            }
+
+            val contentType = response.header(HttpHeaders.ContentType)
+                ?.let { runCatching { ContentType.parse(it) }.getOrNull() }
+                ?: declaredMimeType.takeIf { it.isNotBlank() }?.let(ContentType::parse)
+                ?: defaultContentType
+            val status = HttpStatusCode.fromValue(response.code)
+
+            call.respondOutputStream(contentType = contentType, status = status) {
+                body.byteStream().use { input ->
+                    input.copyTo(this)
+                }
+            }
+        }
+    }
+
+    private suspend fun proxySmbMedia(
+        call: ApplicationCall,
+        uri: Uri,
+        access: SmbRemoteAccess,
+        declaredMimeType: String,
+        defaultContentType: ContentType
+    ) {
+        val connection = SmbConnection(
+            server = uri.host.orEmpty(),
+            share = uri.pathSegments.firstOrNull().orEmpty(),
+            username = access.username,
+            password = access.password,
+            domain = access.domain
+        )
+
+        smbRepository.openFile(connection, uri).use { smbFile ->
+            val totalLength = smbFile.file.length()
+            val range = parseRangeHeader(call.request.headers[HttpHeaders.Range], totalLength)
+
+            if (range == InvalidRange) {
+                call.response.headers.append(HttpHeaders.ContentRange, "bytes */$totalLength")
+                call.respond(HttpStatusCode.RequestedRangeNotSatisfiable)
+                return
+            }
+
+            val selectedRange = range as? LongRange
+            val contentType = declaredMimeType.takeIf { it.isNotBlank() }?.let(ContentType::parse) ?: defaultContentType
+            val contentLength = selectedRange?.let { it.last - it.first + 1 } ?: totalLength
+            val status = if (selectedRange != null) HttpStatusCode.PartialContent else HttpStatusCode.OK
+
+            call.response.headers.append(HttpHeaders.AcceptRanges, "bytes")
+            call.response.headers.append(HttpHeaders.ContentLength, contentLength.toString())
+            if (selectedRange != null) {
+                call.response.headers.append(
+                    HttpHeaders.ContentRange,
+                    "bytes ${selectedRange.first}-${selectedRange.last}/$totalLength"
+                )
+            }
+
+            call.respondOutputStream(contentType = contentType, status = status) {
+                val randomAccessFile = smbFile.randomAccessFile
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                randomAccessFile.seek(selectedRange?.first ?: 0L)
+                var remaining = contentLength
+
+                while (remaining > 0) {
+                    val bytesToRead = minOf(buffer.size.toLong(), remaining).toInt()
+                    val bytesRead = try {
+                        randomAccessFile.read(buffer, 0, bytesToRead)
+                    } catch (_: EOFException) {
+                        -1
+                    }
+                    if (bytesRead <= 0) {
+                        break
+                    }
+                    write(buffer, 0, bytesRead)
+                    remaining -= bytesRead
+                }
+            }
+        }
+    }
+
+    private fun isRemoteUri(uri: Uri): Boolean {
+        return uri.scheme.equals("http", ignoreCase = true) ||
+            uri.scheme.equals("https", ignoreCase = true) ||
+            uri.scheme.equals("smb", ignoreCase = true)
+    }
+
+    private fun parseRangeHeader(rangeHeader: String?, totalLength: Long): Any? {
+        if (rangeHeader.isNullOrBlank()) {
+            return null
+        }
+        val match = Regex("""bytes=(\d*)-(\d*)""").matchEntire(rangeHeader.trim()) ?: return InvalidRange
+        val startText = match.groupValues[1]
+        val endText = match.groupValues[2]
+
+        if (startText.isEmpty() && endText.isEmpty()) {
+            return InvalidRange
+        }
+
+        return if (startText.isEmpty()) {
+            val suffixLength = endText.toLongOrNull() ?: return InvalidRange
+            if (suffixLength <= 0) {
+                InvalidRange
+            } else {
+                val start = (totalLength - suffixLength).coerceAtLeast(0)
+                start..(totalLength - 1)
+            }
+        } else {
+            val start = startText.toLongOrNull() ?: return InvalidRange
+            val end = if (endText.isEmpty()) totalLength - 1 else endText.toLongOrNull() ?: return InvalidRange
+            if (start < 0 || start >= totalLength || end < start) {
+                InvalidRange
+            } else {
+                start..minOf(end, totalLength - 1)
+            }
+        }
+    }
+
     fun stop() {
         server?.stop(1000, 5000)
     }
+
+    private object InvalidRange
 }

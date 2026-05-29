@@ -26,7 +26,7 @@ import coil.compose.LocalImageLoader
 import coil.decode.VideoFrameDecoder
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
-import org.acoustixaudio.casttobrowser.server.CastServerService
+import org.acoustixaudio.casttobrowser.server.CastServerManager
 import org.acoustixaudio.casttobrowser.ui.MainAdaptiveEntry
 import org.acoustixaudio.casttobrowser.ui.purchase.PurchaseScreen
 import org.acoustixaudio.casttobrowser.ui.theme.CastToBrowserTheme
@@ -40,8 +40,7 @@ class MainActivity : ComponentActivity() {
         // Enable Edge-to-Edge
         enableEdgeToEdge()
 
-        // Start the server service
-        startService(Intent(this, CastServerService::class.java))
+        CastServerManager.start(this)
 
         setContent {
             CastToBrowserTheme {
@@ -138,6 +137,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        if (!isChangingConfigurations) {
+            CastServerManager.stop()
+        }
+        super.onDestroy()
     }
 
     private fun handleIntent(intent: Intent, viewModel: MediaViewModel) {
