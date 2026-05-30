@@ -175,23 +175,6 @@ fun MediaListScreen(
                         modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (isPro) {
-                            TextButton(
-                                onClick = { viewModel.restorePurchases() },
-                                modifier = Modifier.padding(end = 4.dp)
-                            ) {
-                                Badge {
-                                    Text("PRO")
-                                }
-                            }
-                        } else {
-                            TextButton(
-                                onClick = { viewModel.openPurchaseScreen() },
-                                modifier = Modifier.padding(end = 4.dp)
-                            ) {
-                                Text("Go Pro")
-                            }
-                        }
                         Box(modifier = Modifier.padding(end = 8.dp)) {
                             TextButton(onClick = { sectionMenuExpanded = true }) {
                                 Text(selectedTab.label)
@@ -242,6 +225,12 @@ fun MediaListScreen(
                                         menuExpanded = false
                                         viewModel.openPurchaseScreen()
                                     }
+                                )
+                            } else {
+                                Text (
+                                    text = "Premium",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                                 )
                             }
                             DropdownMenuItem(
